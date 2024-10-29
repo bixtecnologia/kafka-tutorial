@@ -1,11 +1,10 @@
 import time
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import simplejson as json
 import streamlit as st
 from kafka import KafkaConsumer
 from streamlit_autorefresh import st_autorefresh
+import plotly.express as px
 
 # Função para criar um consumidor Kafka
 def create_kafka_consumer(topic_name):
@@ -19,7 +18,7 @@ def create_kafka_consumer(topic_name):
 
 # Função para buscar dados do Kafka
 def fetch_data_from_kafka(consumer):
-    # Poll Kafka consumer for messages within a timeout period
+    # Poll Kafka consumer for messages within um período de timeout
     messages = consumer.poll(timeout_ms=1000)
     data = []
 
@@ -29,40 +28,31 @@ def fetch_data_from_kafka(consumer):
 
     return data
 
-# Função para plotar um gráfico de barras colorido para a contagem de votos por candidato
+# Função para plotar um gráfico de barras colorido para a contagem de votos por candidato usando Plotly
 def plot_colored_bar_chart(results):
-    data_type = results['candidate_name']
-    colors = plt.cm.viridis(np.linspace(0, 1, len(data_type)))
-    
-    fig, ax = plt.subplots()
-    
-    for i, (candidate, total_votes) in enumerate(zip(data_type, results['total_votes'])):
-        ax.bar(candidate, total_votes, color=colors[i])
-        ax.annotate(str(total_votes), (candidate, total_votes), ha='center', va='bottom', fontsize=12, color='black')
-
-    ax.set_xlabel('Candidato')
-    ax.set_ylabel('Total de Votos')
-    ax.set_title('Contagem de Votos por Candidato')
-    ax.set_xticks(data_type)
-    ax.tick_params(axis='x', rotation=90)
-    
+    fig = px.bar(
+        results,
+        x='candidate_name',
+        y='total_votes',
+        color='candidate_name',
+        title='Contagem de Votos por Candidato',
+        labels={'candidate_name': 'Candidato', 'total_votes': 'Total de Votos'}
+    )
+    fig.update_layout(xaxis_tickangle=90)
     return fig
 
-# Função para plotar um gráfico de donut para a distribuição de votos
-def plot_donut_chart(data: pd.DataFrame, title='Donut Chart', type='candidate'):
+# Função para plotar um gráfico de donut para a distribuição de votos usando Plotly
+def plot_donut_chart(data: pd.DataFrame, title='Distribuição de Votos', type='candidate'):
     if type == 'candidate':
-        labels = list(data['candidate_name'])
-
-    sizes = list(data['total_votes'])
-    fig, ax = plt.subplots()
-    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, wedgeprops=dict(width=0.3))
-    ax.axis('equal')
-    
-    # Add a white circle at the center to create a donut effect
-    centre_circle = plt.Circle((0,0),0.70,fc='white')
-    ax.add_patch(centre_circle)
-
-    plt.title(title)
+        labels = data['candidate_name']
+    sizes = data['total_votes']
+    fig = px.pie(
+        data,
+        names='candidate_name',
+        values='total_votes',
+        hole=0.3,
+        title=title
+    )
     return fig
 
 # Função para atualizar dados exibidos no painel
@@ -74,6 +64,13 @@ def update_data():
 
         votes_consumer = create_kafka_consumer("votes_topic")
         votes_data = fetch_data_from_kafka(votes_consumer)
+        votes_consumer.close()  # Fechar o consumidor
+
+        if not votes_data:
+            st.warning("Nenhum dado de votação disponível no momento.")
+            time.sleep(10)  # Aguarda antes de tentar novamente
+            continue
+
         votes_df = pd.DataFrame(votes_data)
         
         total_votes_all_candidates = votes_df.groupby('candidate_id')['vote'].count().sum()
@@ -101,14 +98,14 @@ def update_data():
         results = results.reset_index(drop=True)
         col1, col2 = st.columns(2)
 
-        # Exibir gráfico de barras e gráfico de donut
+        # Exibir gráfico de barras e gráfico de donut usando Plotly
         with col1:
             bar_fig = plot_colored_bar_chart(results)
-            st.pyplot(bar_fig)
+            st.plotly_chart(bar_fig)
 
         with col2:
             donut_fig = plot_donut_chart(results, title='Distribuição de Votos')
-            st.pyplot(donut_fig)
+            st.plotly_chart(donut_fig)
 
         # Exibir tabela com estatísticas do candidato
         st.table(results)

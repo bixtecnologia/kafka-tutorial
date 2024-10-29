@@ -24,7 +24,7 @@ if __name__ == "__main__":
     conn = psycopg2.connect("host=localhost dbname=voting user=postgres password=postgres")
     cur = conn.cursor()
 
-    # Carregar candidatos do banco de dados
+    # Load candidates from the database
     cur.execute("""
         SELECT candidate_id, candidate_name, position, photo_url
         FROM candidates
@@ -37,18 +37,19 @@ if __name__ == "__main__":
         print(candidates)
 
     consumer.subscribe(['voters_topic'])
+    no_message_counter = 0
+    max_no_message_count = 10  # Adjust as needed
     try:
         while True:
             msg = consumer.poll(timeout=1.0)
             if msg is None:
-                continue
-            elif msg.error():
-                if msg.error().code() == KafkaError._PARTITION_EOF:
-                    continue
-                else:
-                    print(msg.error())
+                no_message_counter += 1
+                if no_message_counter >= max_no_message_count:
+                    print("No new messages received for a while. Voting has ended.")
                     break
+                continue
             else:
+                no_message_counter = 0  # Reset counter
                 voter = json.loads(msg.value().decode('utf-8'))
                 chosen_candidate = random.choice(candidates)
                 vote = voter | chosen_candidate | {
@@ -57,7 +58,7 @@ if __name__ == "__main__":
                 }
 
                 try:
-                    print("User {} is voting for candidate: {}".format(vote['voter_id'], vote['candidate_id']))
+                    print(f"User {vote['voter_id']} is voting for candidate: {vote['candidate_id']}")
                     cur.execute("""
                             INSERT INTO votes (voter_id, candidate_id, voting_time)
                             VALUES (%s, %s, %s)
@@ -73,8 +74,12 @@ if __name__ == "__main__":
                     )
                     producer.poll(0)
                 except Exception as e:
-                    print("Error: {}".format(e))
+                    print(f"Error: {e}")
                     continue
             time.sleep(0.2)
     except KafkaException as e:
         print(e)
+    finally:
+        consumer.close()
+        cur.close()
+        conn.close()

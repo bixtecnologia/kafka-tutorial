@@ -123,5 +123,19 @@ services:
     networks:
       - confluent
 
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    environment:
+      - ADMINER_DESIGN=dracula
+    volumes:
+      - ./service-worker.js:/var/www/html/service-worker.js
+    command: sh -c "ls -l /var/www/html && php -S 0.0.0.0:8080"
+    networks:
+      - confluent
+
 networks:
   confluent:

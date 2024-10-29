@@ -54,6 +54,7 @@ tornado==6.4
 typing_extensions==4.8.0
 tzdata==2023.3
 tzlocal==5.2
+plotly==5.17.0
 urllib3==2.1.0
 validators==0.22.0
 zipp==3.17.0

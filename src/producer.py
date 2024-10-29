@@ -1,57 +1,67 @@
 import random
-
+import concurrent.futures
 import psycopg2
 import requests
 import simplejson as json
 from confluent_kafka import SerializingProducer
+import time
 
-BASE_URL = 'https://randomuser.me/api/?nat=gb'
-PARTIES = ["Management Party", "Savior Party", "Tech Republic Party"]
+BASE_URL = 'https://randomuser.me/api/?nat=us'
+PARTIES = ["Management Party", "South Party", "Republic Party"]
 random.seed(42)
 
 
 def generate_voter_data():
-    response = requests.get(BASE_URL)
-    if response.status_code == 200:
-        user_data = response.json()['results'][0]
-        return {
-            "voter_id": user_data['login']['uuid'],
-            "voter_name": f"{user_data['name']['first']} {user_data['name']['last']}",
-            "date_of_birth": user_data['dob']['date'],
-            "gender": user_data['gender'],
-            "nationality": user_data['nat'],
-            "registration_number": user_data['login']['username'],
-            "address": {
-                "street": f"{user_data['location']['street']['number']} {user_data['location']['street']['name']}",
-                "city": user_data['location']['city'],
-                "state": user_data['location']['state'],
-                "country": user_data['location']['country'],
-                "postcode": user_data['location']['postcode']
-            },
-            "email": user_data['email'],
-            "phone_number": user_data['phone'],
-            "cell_number": user_data['cell'],
-            "picture": user_data['picture']['large'],
-            "registered_age": user_data['registered']['age']
-        }
-    else:
-        return "Error fetching data"
+    retries = 3
+    for attempt in range(retries):
+        try:
+            response = requests.get(BASE_URL, timeout=5)
+            if response.status_code == 200:
+                user_data = response.json()['results'][0]
+                return {
+                    "voter_id": user_data['login']['uuid'],
+                    "voter_name": f"{user_data['name']['first']} {user_data['name']['last']}",
+                    "date_of_birth": user_data['dob']['date'],
+                    "gender": user_data['gender'],
+                    "nationality": user_data['nat'],
+                    "registration_number": user_data['login']['username'],
+                    "address": {
+                        "street": f"{user_data['location']['street']['number']} {user_data['location']['street']['name']}",
+                        "city": user_data['location']['city'],
+                        "state": user_data['location']['state'],
+                        "country": user_data['location']['country'],
+                        "postcode": user_data['location']['postcode']
+                    },
+                    "email": user_data['email'],
+                    "phone_number": user_data['phone'],
+                    "cell_number": user_data['cell'],
+                    "picture": user_data['picture']['large'],
+                    "registered_age": user_data['registered']['age']
+                }
+            else:
+                print(f"Error fetching data, attempt {attempt+1}")
+                time.sleep(1)
+        except requests.exceptions.RequestException as e:
+            print(f"Request exception: {e}, attempt {attempt+1}")
+            time.sleep(1)
+    raise Exception("Failed to fetch voter data after retries")
+
 
 static_data_candidates = [
     {
-        "candidate_name": "Wallace Camargo",
-        "position": "Data Engineer",
-        "photo_url": "https://media.licdn.com/dms/image/D4D03AQHpojqm-qflYA/profile-displayphoto-shrink_800_800/0/1719016191603?e=1726099200&v=beta&t=9cOPUsKfVY3-MaqXViHCFt6SlFVCdnFUhDw9mf-5-Tc"
+        "candidate_name": "Jonathan Wright",
+        "position": "Partido Republicano",
+        "photo_url": "https://github.com/user-attachments/assets/3987da17-166f-4890-965c-39503c4f3a67"
     },
     {
-        "candidate_name": "Luciano Borba",
-        "position": "Data Engineer",
-        "photo_url": "https://media.licdn.com/dms/image/D4D03AQE8tTGhm42DjQ/profile-displayphoto-shrink_800_800/0/1705165600625?e=1726099200&v=beta&t=SXcGzaulIdZ8jgXp7UEc9y4kgfsW-mKlmur0xYjVuys"
+        "candidate_name": "Michael Anderson",
+        "position": "Partido Democrata",
+        "photo_url": "https://github.com/user-attachments/assets/e5251c26-0769-4b1c-9265-12b2b19b7fe0"
     },
     {
-        "candidate_name": "Gabriel Quintella",
-        "position": "Data Engineer",
-        "photo_url": "https://media.licdn.com/dms/image/D4D03AQG2e1npyrsRKw/profile-displayphoto-shrink_800_800/0/1696267963299?e=1726099200&v=beta&t=BOMnvq7_EIEHLPEFcOVxeGHSt8SIUk0-oI5QTaHXWxY"
+        "candidate_name": "Emily Bolunn",
+        "position": "Partido Libertário",
+        "photo_url": "https://github.com/user-attachments/assets/9832fb17-b456-4d6e-8ff3-5e2fc68dda46"
     }
 ]
 
@@ -142,14 +152,44 @@ def insert_voters(conn, cur, voter):
     conn.commit()
 
 
+def process_voter(i):
+    retries = 3
+    for attempt in range(retries):
+        try:
+            # Each thread has its own connection and producer
+            conn = psycopg2.connect("host=localhost dbname=voting user=postgres password=postgres")
+            cur = conn.cursor()
+            producer = SerializingProducer({'bootstrap.servers': 'localhost:9092'})
+
+            voter_data = generate_voter_data()
+
+            insert_voters(conn, cur, voter_data)
+
+            producer.produce(
+                voters_topic,
+                key=voter_data["voter_id"],
+                value=json.dumps(voter_data),
+                on_delivery=delivery_report
+            )
+            producer.flush()
+
+            print(f'Produced voter {i}, data: {voter_data}')
+
+            cur.close()
+            conn.close()
+            break  # Break the retry loop if successful
+        except Exception as e:
+            print(f"Error processing voter {i} on attempt {attempt+1}: {e}")
+            if attempt == retries - 1:
+                print(f"Failed to process voter {i} after {retries} attempts.")
+            time.sleep(1)  # Wait a bit before retrying
+
 if __name__ == "__main__":
+    # Initial setup remains the same
     conn = psycopg2.connect("host=localhost dbname=voting user=postgres password=postgres")
     cur = conn.cursor()
-
-    producer = SerializingProducer({'bootstrap.servers': 'localhost:9092', })
     create_tables(conn, cur)
-
-    # Inserir candidatos estáticos no banco de dados
+    # Insert static candidates if not already present
     cur.execute("SELECT COUNT(*) FROM candidates")
     if cur.fetchone()[0] == 0:
         for candidate in static_data_candidates:
@@ -158,17 +198,11 @@ if __name__ == "__main__":
                 VALUES (%s, %s, %s)
             """, (candidate['candidate_name'], candidate['position'], candidate['photo_url']))
         conn.commit()
+    cur.close()
+    conn.close()
 
-    for i in range(500):
-        voter_data = generate_voter_data()
-        insert_voters(conn, cur, voter_data)
-
-        producer.produce(
-            voters_topic,
-            key=voter_data["voter_id"],
-            value=json.dumps(voter_data),
-            on_delivery=delivery_report
-        )
-
-        print('Produced voter {}, data: {}'.format(i, voter_data))
-        producer.flush()
+    # Multithreading to process voters
+    num_voters = 500
+    max_workers = 15  # Adjust based on your system's capacity
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor.map(process_voter, range(num_voters))
